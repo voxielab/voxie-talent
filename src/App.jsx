@@ -12,6 +12,54 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 const STORAGE_VERSION = 'v1';
 
+// ─── Custom role normalization helpers ──────────────────────────────────────
+// When a user picks "Outro" they can type a free-text role. We normalize
+// (trim, collapse spaces, capitalize) and dedupe so "designer gráfico",
+// "Designer Gráfico" and "  designer  gráfico " all become "Designer Gráfico".
+const stripDiacritics = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+const normalizeRoleForCompare = (s) => stripDiacritics(String(s || '').trim().toLowerCase().replace(/\s+/g, ' '));
+
+const titleCaseRole = (s) => {
+  const small = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'a', 'o']);
+  return String(s || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .split(' ')
+    .map((w, i) => (i > 0 && small.has(w)) ? w : (w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+};
+
+const mergeCustomRoles = (baseRoles, candidates) => {
+  // Collect every role currently in use across candidates
+  const inUse = new Set();
+  (candidates || []).forEach(c => {
+    if (c.roleApplied) inUse.add(c.roleApplied);
+  });
+  const baseSet = new Set(baseRoles.map(normalizeRoleForCompare));
+  const extra = [];
+  inUse.forEach(role => {
+    if (!baseSet.has(normalizeRoleForCompare(role)) && role !== 'Outro' && role !== 'A definir') {
+      extra.push(titleCaseRole(role));
+    }
+  });
+  // Dedupe extras by normalized form
+  const dedupedExtras = [];
+  const seen = new Set();
+  extra.forEach(r => {
+    const key = normalizeRoleForCompare(r);
+    if (!seen.has(key)) { seen.add(key); dedupedExtras.push(r); }
+  });
+  // Final list: base roles minus the trailing 'Outro' / 'A definir', + extras alphabetical, + 'A definir', 'Outro' at end
+  const trailing = baseRoles.filter(r => r === 'A definir' || r === 'Outro');
+  const main = baseRoles.filter(r => r !== 'A definir' && r !== 'Outro');
+  const combined = [...main, ...dedupedExtras].sort((a, b) =>
+    stripDiacritics(a).localeCompare(stripDiacritics(b), 'pt')
+  );
+  return [...combined, ...trailing];
+};
+
 const ROLE_OPTIONS = [
   'Designer Sénior',
   'Designer Mid/Junior',
@@ -456,10 +504,10 @@ const Logo = ({ size = 'md', showSub = true }) => {
         border: `1px solid ${theme.accent}`, display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: fontStack, fontStyle: 'italic', color: theme.accent, fontSize: s.mark * 0.5,
         fontWeight: 500,
-      }}>V</div>
+      }}>O</div>
       <div>
         <div style={{ fontFamily: fontStack, fontSize: s.name, color: theme.text, fontWeight: 500, letterSpacing: '-0.01em', lineHeight: 1 }}>
-          Voxie <span style={{ fontStyle: 'italic', color: theme.accent }}>Talent</span>
+          Open <span style={{ fontStyle: 'italic', color: theme.accent }}>Talent</span>
         </div>
         {showSub && (
           <div style={{ fontFamily: sansStack, fontSize: 10, color: theme.textMute, letterSpacing: '0.16em', textTransform: 'uppercase', marginTop: 4 }}>
@@ -577,6 +625,56 @@ const Select = (props) => (
   }} />
 );
 
+// RoleSelect: dropdown of roles. When user picks "Outro", reveals a free-text
+// input to type a custom role. The custom role is normalized (capitalized,
+// trimmed) on blur and pushed into the parent's state.
+const RoleSelect = ({ value, onChange, availableRoles }) => {
+  // Determine if current value is in the dropdown or a custom one
+  const inList = availableRoles.includes(value);
+  const [showCustom, setShowCustom] = useState(!inList && value && value !== 'Outro');
+  const [customText, setCustomText] = useState(!inList && value !== 'Outro' ? value : '');
+
+  const handleSelect = (e) => {
+    const v = e.target.value;
+    if (v === 'Outro') {
+      setShowCustom(true);
+      setCustomText('');
+      onChange('Outro');
+    } else {
+      setShowCustom(false);
+      setCustomText('');
+      onChange(v);
+    }
+  };
+
+  const commitCustom = () => {
+    const cleaned = titleCaseRole(customText);
+    if (cleaned) onChange(cleaned);
+  };
+
+  return (
+    <div>
+      <Select value={inList ? value : 'Outro'} onChange={handleSelect}>
+        {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
+      </Select>
+      {showCustom && (
+        <div style={{ marginTop: 8 }}>
+          <Input
+            value={customText}
+            onChange={(e) => setCustomText(e.target.value)}
+            onBlur={commitCustom}
+            placeholder="Ex: Designer Gráfico, Motion Designer..."
+            autoFocus
+          />
+          <div style={{ fontSize: 11, color: theme.textMute, marginTop: 5, fontFamily: sansStack, fontStyle: 'italic' }}>
+            Escreve o cargo. Será adicionado à lista para futuros candidatos.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Checkbox = ({ label, checked, onChange }) => (
   <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '6px 0', fontSize: 13, color: theme.text, fontFamily: sansStack }}>
     <span style={{
@@ -667,7 +765,7 @@ const AuthGate = ({ onAuth }) => {
             </h2>
             <p style={{ color: theme.textDim, fontSize: 13, lineHeight: 1.6, marginTop: 12, textAlign: 'center', maxWidth: 340 }}>
               {mode === 'setup'
-                ? 'Esta palavra-passe protege a base de talento da Voxie. Mínimo 6 caracteres. Guarda-a num local seguro — não há recuperação automática.'
+                ? 'Esta palavra-passe protege a base de talento da Open Talent. Mínimo 6 caracteres. Guarda-a num local seguro — não há recuperação automática.'
                 : 'Insere a palavra-passe para aceder à base de talento.'}
             </p>
           </div>
@@ -721,7 +819,7 @@ const AuthGate = ({ onAuth }) => {
         </div>
 
         <div style={{ marginTop: 24, textAlign: 'center', fontSize: 10, color: theme.textMute, letterSpacing: '0.16em', textTransform: 'uppercase' }}>
-          Voxie Talent · Concierge Recruitment
+          Open Talent · Concierge Recruitment
         </div>
       </div>
     </div>
@@ -731,7 +829,7 @@ const AuthGate = ({ onAuth }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // FILTER BAR
 // ─────────────────────────────────────────────────────────────────────────────
-const FilterBar = ({ filters, setFilters, onReset, candidates }) => {
+const FilterBar = ({ filters, setFilters, onReset, candidates, availableRoles }) => {
   const [open, setOpen] = useState(false);
   const activeCount = Object.values(filters).filter(v => v && v !== 'all' && (Array.isArray(v) ? v.length : true)).length;
 
@@ -762,7 +860,7 @@ const FilterBar = ({ filters, setFilters, onReset, candidates }) => {
           <Field label="Cargo (Best Fit)">
             <Select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })}>
               <option value="all">Todos</option>
-              {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+              {availableRoles.filter(r => r !== 'Outro').map(r => <option key={r} value={r}>{r}</option>)}
             </Select>
           </Field>
           <Field label="Nível de Experiência">
@@ -868,7 +966,7 @@ const CandidateCard = ({ candidate, onClick }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // CANDIDATE DETAIL PANEL (admin)
 // ─────────────────────────────────────────────────────────────────────────────
-const CandidateDetail = ({ candidate, onClose, onSave, onDelete }) => {
+const CandidateDetail = ({ candidate, onClose, onSave, onDelete, availableRoles }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(candidate);
   const [shareOpen, setShareOpen] = useState(false);
@@ -971,16 +1069,12 @@ const CandidateDetail = ({ candidate, onClose, onSave, onDelete }) => {
             <Grid>
               <DetailField label="Cargo Aplicado">
                 {editing ? (
-                  <Select value={draft.roleApplied} onChange={(e) => setDraft({ ...draft, roleApplied: e.target.value })}>
-                    {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                  </Select>
+                  <RoleSelect value={draft.roleApplied} onChange={(v) => setDraft({ ...draft, roleApplied: v })} availableRoles={availableRoles} />
                 ) : showOrNa(c.roleApplied)}
               </DetailField>
-              <DetailField label="Best Fit (Voxie)">
+              <DetailField label="Best Fit (Open Talent)">
                 {editing ? (
-                  <Select value={draft.bestFitRole} onChange={(e) => setDraft({ ...draft, bestFitRole: e.target.value })}>
-                    {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                  </Select>
+                  <RoleSelect value={draft.bestFitRole} onChange={(v) => setDraft({ ...draft, bestFitRole: v })} availableRoles={availableRoles} />
                 ) : <span style={{ color: theme.accent, fontWeight: 500 }}>{c.bestFitRole || 'A definir'}</span>}
               </DetailField>
               <DetailField label="Nível">
@@ -1123,14 +1217,14 @@ const CandidateDetail = ({ candidate, onClose, onSave, onDelete }) => {
                 ) : showOrNa(c.contact?.instagram)}
               </DetailField>
             </Grid>
-            <DetailField label="Portfólio">
+            <DetailField label="Link do Portfólio">
               {editing ? (
-                <Input value={draft.portfolioLink || ''} onChange={(e) => setDraft({ ...draft, portfolioLink: e.target.value })} />
+                <Input value={draft.portfolioLink || ''} onChange={(e) => setDraft({ ...draft, portfolioLink: e.target.value })} placeholder="https://..." />
               ) : showOrNa(c.portfolioLink)}
             </DetailField>
-            <DetailField label="CV">
+            <DetailField label="Link do Currículo">
               {editing ? (
-                <Input value={draft.cvLink || ''} onChange={(e) => setDraft({ ...draft, cvLink: e.target.value })} />
+                <Input value={draft.cvLink || ''} onChange={(e) => setDraft({ ...draft, cvLink: e.target.value })} placeholder="https://..." />
               ) : showOrNa(c.cvLink)}
             </DetailField>
           </Section>
@@ -1194,7 +1288,7 @@ const PublicProfile = ({ candidate }) => {
         <AlertCircle size={32} color={theme.accentDim} />
         <h2 style={{ fontFamily: fontStack, fontSize: 28, marginTop: 20, marginBottom: 8, fontWeight: 400 }}>Perfil indisponível</h2>
         <p style={{ color: theme.textDim, maxWidth: 400 }}>Este link de partilha pode ter expirado ou o candidato já não está disponível na nossa base de talentos.</p>
-        <p style={{ color: theme.textMute, fontSize: 12, marginTop: 24 }}>Para mais informação, contacte a Voxie Talent directamente.</p>
+        <p style={{ color: theme.textMute, fontSize: 12, marginTop: 24 }}>Para mais informação, contacte a Open Talent directamente.</p>
       </div>
     );
   }
@@ -1287,15 +1381,15 @@ const PublicProfile = ({ candidate }) => {
             Interessado em avançar com este candidato?
           </h3>
           <p style={{ color: theme.textDim, fontSize: 14, lineHeight: 1.6, maxWidth: 520, margin: '0 auto 20px' }}>
-            Todas as conversas, entrevistas e contratações são geridas pela Voxie Talent. Contacte-nos para agendar uma entrevista ou pedir referências adicionais.
+            Todas as conversas, entrevistas e contratações são geridas pela Open Talent. Contacte-nos para agendar uma entrevista ou pedir referências adicionais.
           </p>
           <p style={{ color: theme.textMute, fontSize: 11, fontStyle: 'italic', letterSpacing: '0.04em' }}>
-            Os dados de contacto do candidato são confidenciais e geridos pela Voxie.
+            Os dados de contacto do candidato são confidenciais e geridos pela Open Talent.
           </p>
         </div>
 
         <div style={{ marginTop: 48, textAlign: 'center', fontSize: 10, color: theme.textMute, letterSpacing: '0.16em', textTransform: 'uppercase' }}>
-          Voxie Talent · Concierge Recruitment
+          Open Talent · Concierge Recruitment
         </div>
       </div>
     </div>
@@ -1347,7 +1441,7 @@ const extractFromFiles = async (files) => {
     return { type: 'image', source: { type: 'base64', media_type: file.type, data: base64Data } };
   }));
 
-  const prompt = `És um sistema de extracção de dados estruturados de CVs e portfólios para a Voxie Talent (agência de talento angolana).
+  const prompt = `És um sistema de extracção de dados estruturados de currículos e portfólios para a Open Talent (plataforma de talento da agência angolana Voxie Lab).
 
 Analisa o(s) documento(s) anexo(s) e extrai APENAS dados explicitamente mencionados. NÃO INVENTES nem infiras dados que não estejam claramente presentes.
 
@@ -1490,7 +1584,7 @@ const ChoicePanel = ({ onUpload, onManual }) => {
           Candidatura · Auto-Registo
         </div>
         <h1 style={{ fontFamily: fontStack, fontSize: 48, margin: 0, fontWeight: 400, letterSpacing: '-0.025em', lineHeight: 1.1 }}>
-          Junta-te à base de talento <span style={{ fontStyle: 'italic', color: theme.accent }}>Voxie</span>
+          Junta-te à base de talento <span style={{ fontStyle: 'italic', color: theme.accent }}>Open Talent</span>
         </h1>
         <p style={{ color: theme.textDim, fontSize: 15, lineHeight: 1.7, marginTop: 18, maxWidth: 580 }}>
           Como queres começar?
@@ -1516,10 +1610,10 @@ const ChoicePanel = ({ onUpload, onManual }) => {
             Mais rápido · ~30 segundos
           </div>
           <h3 style={{ fontFamily: fontStack, fontSize: 24, margin: '0 0 10px', fontWeight: 400, letterSpacing: '-0.015em', lineHeight: 1.2 }}>
-            Tenho CV ou portfólio
+            Tenho Currículo ou portfólio
           </h3>
           <p style={{ color: theme.textDim, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-            Envia o teu CV (PDF) e/ou portfólio. A nossa IA extrai automaticamente os teus dados — só revês e completas o que faltar.
+            Envia o teu Currículo (PDF) e/ou portfólio. A nossa IA extrai automaticamente os teus dados — só revês e completas o que faltar.
           </p>
         </button>
 
@@ -1544,13 +1638,13 @@ const ChoicePanel = ({ onUpload, onManual }) => {
             Preencher manualmente
           </h3>
           <p style={{ color: theme.textDim, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-            Não tens CV digital? Sem problema. Preenche o formulário tradicional — só leva uns minutos.
+            Não tens Currículo digital? Sem problema. Preenche o formulário tradicional — só leva uns minutos.
           </p>
         </button>
       </div>
 
       <p style={{ fontSize: 11, color: theme.textMute, marginTop: 32, textAlign: 'center', fontStyle: 'italic', letterSpacing: '0.04em' }}>
-        Os teus dados são confidenciais e geridos exclusivamente pela Voxie Talent.
+        Os teus dados são confidenciais e geridos exclusivamente pela Open Talent.
       </p>
     </RegisterShell>
   );
@@ -1617,7 +1711,7 @@ const UploadPanel = ({ onSubmit, onBack, onSkipToManual, externalError }) => {
           Passo 1 de 2 · Envia os teus ficheiros
         </div>
         <h1 style={{ fontFamily: fontStack, fontSize: 40, margin: 0, fontWeight: 400, letterSpacing: '-0.025em', lineHeight: 1.1 }}>
-          Envia o teu CV ou portfólio
+          Envia o teu Currículo ou portfólio
         </h1>
         <p style={{ color: theme.textDim, fontSize: 14, lineHeight: 1.7, marginTop: 14 }}>
           Aceitamos PDF, JPG, PNG e WEBP. Até {MAX_FILES} ficheiros, máximo {MAX_FILE_SIZE_MB}MB cada. A análise demora cerca de 20-30 segundos.
@@ -1736,7 +1830,7 @@ const ExtractingPanel = ({ fileCount }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SELF-REGISTER FORM (public)
 // ─────────────────────────────────────────────────────────────────────────────
-const RegisterForm = ({ onSubmit }) => {
+const RegisterForm = ({ onSubmit, availableRoles }) => {
   const [step, setStep] = useState('choice'); // choice | upload | extracting | form
   const [data, setData] = useState(EMPTY_FORM_DATA);
   const [autoFilledKeys, setAutoFilledKeys] = useState(new Set());
@@ -1809,10 +1903,10 @@ const RegisterForm = ({ onSubmit }) => {
         </div>
         <h1 style={{ fontFamily: fontStack, fontSize: 42, margin: 0, fontWeight: 400, letterSpacing: '-0.02em' }}>Candidatura recebida</h1>
         <p style={{ color: theme.textDim, maxWidth: 480, marginTop: 16, lineHeight: 1.7, fontSize: 15 }}>
-          Obrigada, <strong style={{ color: theme.text }}>{data.name.split(' ')[0]}</strong>. O teu perfil foi adicionado à base de talentos da Voxie. Sempre que abrir uma vaga compatível, entraremos em contacto directamente.
+          Obrigada, <strong style={{ color: theme.text }}>{data.name.split(' ')[0]}</strong>. O teu perfil foi adicionado à base de talentos da Open Talent. Sempre que abrir uma vaga compatível, entraremos em contacto directamente.
         </p>
         <p style={{ color: theme.textMute, fontSize: 11, marginTop: 24, letterSpacing: '0.06em', fontStyle: 'italic' }}>
-          Voxie Talent · Concierge Recruitment
+          Open Talent · Concierge Recruitment
         </p>
       </div>
     );
@@ -1853,12 +1947,12 @@ const RegisterForm = ({ onSubmit }) => {
             {autoFilledKeys.size > 0 ? (
               <>Revê os teus <span style={{ fontStyle: 'italic', color: theme.accent }}>dados</span></>
             ) : (
-              <>Junta-te à base de talento <span style={{ fontStyle: 'italic', color: theme.accent }}>Voxie</span></>
+              <>Junta-te à base de talento <span style={{ fontStyle: 'italic', color: theme.accent }}>Open Talent</span></>
             )}
           </h1>
           <p style={{ color: theme.textDim, fontSize: 15, lineHeight: 1.7, marginTop: 18, maxWidth: 580 }}>
             {autoFilledKeys.size > 0 ? (
-              <>Os campos marcados com <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: theme.accent, background: `${theme.accent}1A`, border: `1px solid ${theme.accent}40`, padding: '1px 6px', borderRadius: 999, fontWeight: 500, verticalAlign: 'middle' }}><Check size={9} strokeWidth={3} /> auto</span> foram preenchidos pela IA a partir do teu CV. Confirma se estão correctos e completa os obrigatórios em falta (com <span style={{ color: theme.accent }}>*</span>).</>
+              <>Os campos marcados com <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: theme.accent, background: `${theme.accent}1A`, border: `1px solid ${theme.accent}40`, padding: '1px 6px', borderRadius: 999, fontWeight: 500, verticalAlign: 'middle' }}><Check size={9} strokeWidth={3} /> auto</span> foram preenchidos pela IA a partir do teu Currículo. Confirma se estão correctos e completa os obrigatórios em falta (com <span style={{ color: theme.accent }}>*</span>).</>
             ) : (
               <>Preenche o teu perfil. Sempre que abrirmos uma vaga compatível com a tua experiência, entraremos em contacto. Os campos marcados com <span style={{ color: theme.accent }}>*</span> são obrigatórios — os restantes são opcionais.</>
             )}
@@ -1883,9 +1977,7 @@ const RegisterForm = ({ onSubmit }) => {
           <FormSection title="Posição Pretendida">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
               <Field label="Cargo" required autoFilled={autoFilledKeys.has('roleApplied')}>
-                <Select value={data.roleApplied} onChange={(e) => setData({ ...data, roleApplied: e.target.value })}>
-                  {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                </Select>
+                <RoleSelect value={data.roleApplied} onChange={(v) => setData({ ...data, roleApplied: v })} availableRoles={availableRoles} />
               </Field>
               <Field label="Nível" optional autoFilled={autoFilledKeys.has('experienceLevel')}>
                 <Select value={data.experienceLevel} onChange={(e) => setData({ ...data, experienceLevel: e.target.value })}>
@@ -1967,7 +2059,7 @@ const RegisterForm = ({ onSubmit }) => {
           </Btn>
 
           <p style={{ fontSize: 11, color: theme.textMute, marginTop: 18, textAlign: 'center', lineHeight: 1.6, fontStyle: 'italic' }}>
-            Ao submeter este formulário concordas com a inclusão dos teus dados na base de talentos da Voxie. Contactaremos sempre que houver vaga compatível.
+            Ao submeter este formulário concordas com a inclusão dos teus dados na base de talentos da Open Talent. Contactaremos sempre que houver vaga compatível.
           </p>
         </div>
       </div>
@@ -2114,7 +2206,7 @@ const ShareDialog = ({ url, title, description, onClose }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN DASHBOARD
 // ─────────────────────────────────────────────────────────────────────────────
-const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDeleteCandidate, onLogout }) => {
+const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDeleteCandidate, onLogout, availableRoles }) => {
   const [filters, setFilters] = useState({ search: '', role: 'all', level: 'all', workModel: 'all', status: 'all', maxSalary: '' });
   const [selected, setSelected] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -2188,7 +2280,7 @@ const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDelet
 
         {/* Filter */}
         <div style={{ marginBottom: 24 }}>
-          <FilterBar filters={filters} setFilters={setFilters} onReset={resetFilters} candidates={filtered} />
+          <FilterBar filters={filters} setFilters={setFilters} onReset={resetFilters} candidates={filtered} availableRoles={availableRoles} />
         </div>
 
         {/* Grid */}
@@ -2208,7 +2300,7 @@ const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDelet
 
         {/* Footer */}
         <div style={{ marginTop: 64, paddingTop: 24, borderTop: `1px solid ${theme.border}`, fontSize: 10, color: theme.textMute, letterSpacing: '0.16em', textTransform: 'uppercase', textAlign: 'center' }}>
-          Voxie Talent · Concierge Recruitment · v1.1
+          Open Talent · Concierge Recruitment · v1.1
         </div>
       </div>
 
@@ -2218,6 +2310,7 @@ const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDelet
           onClose={() => setSelected(null)}
           onSave={(updated) => { onUpdateCandidate(updated); setSelected(updated); }}
           onDelete={(id) => { onDeleteCandidate(id); setSelected(null); }}
+          availableRoles={availableRoles}
         />
       )}
 
@@ -2236,6 +2329,7 @@ const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDelet
           onClose={() => setShowAdd(false)}
           onSave={(c) => { onAddCandidate(c); setShowAdd(false); }}
           onDelete={() => setShowAdd(false)}
+          availableRoles={availableRoles}
         />
       )}
 
@@ -2357,9 +2451,12 @@ export default function App() {
     return <PublicProfile candidate={candidate} />;
   }
 
+  // Compute available roles dynamically (base + custom roles already in DB)
+  const availableRoles = mergeCustomRoles(ROLE_OPTIONS, candidates);
+
   // Self-register view (no auth needed)
   if (view === 'register') {
-    return <RegisterForm onSubmit={handleAdd} />;
+    return <RegisterForm onSubmit={handleAdd} availableRoles={availableRoles} />;
   }
 
   // Admin view — requires auth
@@ -2374,6 +2471,7 @@ export default function App() {
       onUpdateCandidate={handleUpdate}
       onDeleteCandidate={handleDelete}
       onLogout={() => setAuthenticated(false)}
+      availableRoles={availableRoles}
     />
   );
 }
