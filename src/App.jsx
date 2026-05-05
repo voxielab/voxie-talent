@@ -1557,7 +1557,7 @@ const ChoicePanel = ({ onUpload, onManual }) => {
 };
 
 // ─── Step 2a: File upload with drag-drop ────────────────────────────────────
-const UploadPanel = ({ onSubmit, onBack, externalError }) => {
+const UploadPanel = ({ onSubmit, onBack, onSkipToManual, externalError }) => {
   const [files, setFiles] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [validationError, setValidationError] = useState('');
@@ -1689,6 +1689,14 @@ const UploadPanel = ({ onSubmit, onBack, externalError }) => {
         Analisar e continuar
       </Btn>
 
+      {externalError && onSkipToManual && (
+        <div style={{ marginTop: 10 }}>
+          <Btn onClick={onSkipToManual} variant="secondary" size="lg" full icon={Edit3}>
+            Preencher manualmente
+          </Btn>
+        </div>
+      )}
+
       <p style={{ fontSize: 11, color: theme.textMute, marginTop: 18, textAlign: 'center', lineHeight: 1.6, fontStyle: 'italic' }}>
         A análise é feita com IA. Os teus dados nunca são partilhados com terceiros.
       </p>
@@ -1748,9 +1756,17 @@ const RegisterForm = ({ onSubmit }) => {
       setStep('form');
     } catch (err) {
       console.error('Extraction failed:', err);
-      setExtractError(err?.message
-        ? `Não conseguimos analisar o ficheiro: ${err.message}`
-        : 'Não foi possível analisar o(s) documento(s). Tenta outro ficheiro ou preenche manualmente.');
+      const msg = String(err?.message || '').toLowerCase();
+      const isBudgetError = msg.includes('credit') || msg.includes('balance') ||
+                            msg.includes('rate') || msg.includes('quota') ||
+                            msg.includes('429') || msg.includes('overloaded');
+      if (isBudgetError) {
+        setExtractError('A análise automática está temporariamente indisponível. Podes preencher o formulário manualmente — leva poucos minutos.');
+      } else {
+        setExtractError(err?.message
+          ? `Não conseguimos analisar o ficheiro: ${err.message}. Podes tentar outro ficheiro ou preencher manualmente.`
+          : 'Não foi possível analisar o(s) documento(s). Podes tentar outro ficheiro ou preencher manualmente.');
+      }
       setStep('upload');
     }
   };
@@ -1807,7 +1823,7 @@ const RegisterForm = ({ onSubmit }) => {
   }
 
   if (step === 'upload') {
-    return <UploadPanel onSubmit={handleFilesSubmit} onBack={() => { setExtractError(''); setStep('choice'); }} externalError={extractError} />;
+    return <UploadPanel onSubmit={handleFilesSubmit} onBack={() => { setExtractError(''); setStep('choice'); }} onSkipToManual={() => { setExtractError(''); setStep('form'); }} externalError={extractError} />;
   }
 
   if (step === 'extracting') {
