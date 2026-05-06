@@ -75,10 +75,24 @@ const ROLE_OPTIONS = [
 
 const STATUS_OPTIONS = [
   { value: 'Em Análise', color: '#C4A464' },
-  { value: 'Aprovado', color: '#7A9B6F' },
-  { value: 'Rejeitado', color: '#B5746B' },
-  { value: 'Potencial Futuro', color: '#9B7FA8' },
+  { value: 'Activo', color: '#7A9B6F' },
+  { value: 'Contratado', color: '#9B7FA8' },
+  { value: 'Arquivado', color: '#B5746B' },
 ];
+
+// Mapping of admin status → public status (what candidate sees)
+const PUBLIC_STATUS_MAP = {
+  'Em Análise': 'Recebida',
+  'Activo': 'Activa',
+  'Contratado': 'Activa',
+  'Arquivado': 'Arquivada',
+};
+
+const PUBLIC_STATUS_DESCRIPTION = {
+  'Recebida': 'A tua candidatura foi recebida e está a ser analisada pela nossa equipa.',
+  'Activa': 'O teu perfil está aprovado e activo na nossa base de talento. Entraremos em contacto sempre que houver uma vaga compatível.',
+  'Arquivada': 'O teu perfil já não se encontra activo na nossa base. Para reactivar, entra em contacto connosco.',
+};
 
 const EXPERIENCE_LEVELS = ['Junior', 'Mid', 'Senior', 'Lead', 'A definir'];
 const WORK_MODELS = ['Presencial', 'Híbrido', 'Virtual', 'Freelance'];
@@ -340,11 +354,22 @@ const supabaseFetch = async (path, options = {}) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // CANDIDATES — CRUD
 // ─────────────────────────────────────────────────────────────────────────────
+// Migrate legacy statuses to new model. Used when reading from DB.
+const migrateStatus = (status) => {
+  const map = {
+    'Aprovado': 'Activo',
+    'Rejeitado': 'Arquivado',
+    'Potencial Futuro': 'Em Análise',
+    'Em Processo': 'Em Análise',
+  };
+  return map[status] || status;
+};
+
 const loadCandidates = async () => {
   try {
     const rows = await supabaseFetch('/candidates?select=*&order=created_at.asc');
     if (rows && rows.length > 0) {
-      return rows.map(r => r.data);
+      return rows.map(r => ({ ...r.data, status: migrateStatus(r.data.status) }));
     }
     // Empty table → seed once with initial demo candidates
     try {
@@ -2234,8 +2259,9 @@ const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDelet
 
   const stats = useMemo(() => ({
     total: candidates.length,
-    approved: candidates.filter(c => c.status === 'Aprovado').length,
+    active: candidates.filter(c => c.status === 'Activo').length,
     pending: candidates.filter(c => c.status === 'Em Análise').length,
+    contracted: candidates.filter(c => c.status === 'Contratado').length,
     selfRegistered: candidates.filter(c => c.source === 'self-registered').length,
   }), [candidates]);
 
@@ -2273,7 +2299,7 @@ const AdminDashboard = ({ candidates, onAddCandidate, onUpdateCandidate, onDelet
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 32 }}>
           <StatCard icon={Users} label="Total" value={stats.total} />
-          <StatCard icon={Check} label="Aprovados" value={stats.approved} accent />
+          <StatCard icon={Check} label="Activos" value={stats.active} accent />
           <StatCard icon={Clock} label="Em Análise" value={stats.pending} />
           <StatCard icon={Sparkles} label="Auto-registos" value={stats.selfRegistered} />
         </div>
